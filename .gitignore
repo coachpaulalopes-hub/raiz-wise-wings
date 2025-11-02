@@ -12,6 +12,19 @@ dist
 dist-ssr
 *.local
 
+# Environment variables
+.env
+.env.local
+.env.production
+.env.*.local
+
+# Service role keys (NEVER commit these)
+setup-admin.js
+auto-setup-security.js
+auto-setup-security.ps1
+verify-setup.ps1
+*.service-role.key
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

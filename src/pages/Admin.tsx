@@ -8,105 +8,257 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-import { Trash2, Eye, EyeOff, Edit } from "lucide-react";
+import { Trash2, Eye, EyeOff, Edit, LogOut } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
+
+// Validation schemas
+const blogPostSchema = z.object({
+  title: z.string().min(1, "Título é obrigatório").max(200, "Título deve ter no máximo 200 caracteres"),
+  excerpt: z.string().min(1, "Resumo é obrigatório").max(500, "Resumo deve ter no máximo 500 caracteres"),
+  cover_image: z.string().url("URL inválida").optional().or(z.literal("")),
+  content: z.string().min(1, "Conteúdo é obrigatório").max(50000, "Conteúdo deve ter no máximo 50000 caracteres"),
+  published: z.boolean().default(false),
+});
+
+type BlogPostFormData = z.infer<typeof blogPostSchema>;
 
 const Admin = () => {
   const [blogPosts, setBlogPosts] = useState<any[]>([]);
   const [subscribers, setSubscribers] = useState<any[]>([]);
   const [messages, setMessages] = useState<any[]>([]);
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [editingPost, setEditingPost] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [user, setUser] = useState<any>(null);
   const { toast } = useToast();
   const navigate = useNavigate();
 
-  const ADMIN_PASSWORD = "admin123"; // Em produção, usar autenticação adequada
+  const {
+    register,
+    handleSubmit,
+    formState: { errors },
+    reset,
+  } = useForm<BlogPostFormData>({
+    resolver: zodResolver(blogPostSchema),
+  });
 
+  // Check if user is authenticated on mount
   useEffect(() => {
-    if (isAuthenticated) {
+    checkAuth();
+    
+    // Listen for auth state changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session) {
+        setUser(session.user);
+        setIsAuthenticated(true);
+        fetchData();
+      } else {
+        setUser(null);
+        setIsAuthenticated(false);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const checkAuth = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session) {
+      setUser(session.user);
+      setIsAuthenticated(true);
       fetchData();
     }
-  }, [isAuthenticated]);
+  };
 
   const fetchData = async () => {
-    const [postsData, subsData, messagesData] = await Promise.all([
-      supabase.from("blog_posts").select("*").order("created_at", { ascending: false }),
-      supabase.from("newsletter_subscribers").select("*").order("created_at", { ascending: false }),
-      supabase.from("contact_messages").select("*").order("created_at", { ascending: false }),
-    ]);
+    if (!isAuthenticated) return;
 
-    if (postsData.data) setBlogPosts(postsData.data);
-    if (subsData.data) setSubscribers(subsData.data);
-    if (messagesData.data) setMessages(messagesData.data);
-  };
+    try {
+      const [postsData, subsData, messagesData] = await Promise.all([
+        supabase.from("blog_posts").select("*").order("created_at", { ascending: false }),
+        supabase.from("newsletter_subscribers").select("*").order("created_at", { ascending: false }),
+        supabase.from("contact_messages").select("*").order("created_at", { ascending: false }),
+      ]);
 
-  const handleLogin = () => {
-    if (password === ADMIN_PASSWORD) {
-      setIsAuthenticated(true);
-      toast({ title: "Autenticado com sucesso!" });
-    } else {
-      toast({ title: "Senha incorreta", variant: "destructive" });
+      if (postsData.error) {
+        console.error("Error fetching posts:", postsData.error);
+        toast({
+          title: "Erro ao carregar artigos",
+          description: postsData.error.message,
+          variant: "destructive",
+        });
+      } else {
+        setBlogPosts(postsData.data || []);
+      }
+
+      if (subsData.error) {
+        console.error("Error fetching subscribers:", subsData.error);
+      } else {
+        setSubscribers(subsData.data || []);
+      }
+
+      if (messagesData.error) {
+        console.error("Error fetching messages:", messagesData.error);
+      } else {
+        setMessages(messagesData.data || []);
+      }
+    } catch (error: any) {
+      console.error("Error fetching data:", error);
+      toast({
+        title: "Erro",
+        description: "Não foi possível carregar os dados.",
+        variant: "destructive",
+      });
     }
   };
 
-  const handleCreatePost = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const formData = new FormData(e.currentTarget);
-    
-    const title = formData.get("title")?.toString() || "";
-    const slug = title.toLowerCase()
-      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^a-z0-9]+/g, "-");
+    setLoading(true);
 
-    const { error } = await supabase.from("blog_posts").insert([{
-      title,
-      slug,
-      excerpt: formData.get("excerpt")?.toString() || "",
-      content: formData.get("content")?.toString() || "",
-      cover_image: formData.get("cover_image")?.toString() || null,
-      published: formData.get("published") === "on",
-    }]);
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
 
-    if (!error) {
+      if (error) throw error;
+
+      if (data.user) {
+        // Check if user has admin role
+        const { data: roleData, error: roleError } = await supabase
+          .from("user_roles")
+          .select("role")
+          .eq("user_id", data.user.id)
+          .eq("role", "admin")
+          .single();
+
+        if (roleError || !roleData) {
+          // Sign out if not admin
+          await supabase.auth.signOut();
+          toast({
+            title: "Acesso negado",
+            description: "Apenas administradores podem acessar este painel.",
+            variant: "destructive",
+          });
+          return;
+        }
+
+        setUser(data.user);
+        setIsAuthenticated(true);
+        toast({ title: "Autenticado com sucesso!" });
+        fetchData();
+      }
+    } catch (error: any) {
+      toast({
+        title: "Erro de autenticação",
+        description: error.message || "Credenciais inválidas.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setIsAuthenticated(false);
+    setUser(null);
+    toast({ title: "Sessão encerrada" });
+  };
+
+  const onSubmitPost = async (data: BlogPostFormData) => {
+    try {
+      const slug = data.title
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9]+/g, "-");
+
+      const { error } = await supabase.from("blog_posts").insert([
+        {
+          title: data.title,
+          slug,
+          excerpt: data.excerpt,
+          content: data.content,
+          cover_image: data.cover_image || null,
+          published: data.published,
+        },
+      ]);
+
+      if (error) throw error;
+
       toast({ title: "Artigo criado!" });
       fetchData();
-      e.currentTarget.reset();
-    } else {
-      toast({ title: "Erro ao criar artigo", variant: "destructive" });
+      reset();
+    } catch (error: any) {
+      toast({
+        title: "Erro ao criar artigo",
+        description: error.message,
+        variant: "destructive",
+      });
     }
   };
 
   const handleUpdatePost = async (id: string, published: boolean) => {
-    const { error } = await supabase
-      .from("blog_posts")
-      .update({ published })
-      .eq("id", id);
+    try {
+      const { error } = await supabase
+        .from("blog_posts")
+        .update({ published })
+        .eq("id", id);
 
-    if (!error) {
+      if (error) throw error;
+
       toast({ title: "Artigo atualizado!" });
       fetchData();
+    } catch (error: any) {
+      toast({
+        title: "Erro ao atualizar artigo",
+        description: error.message,
+        variant: "destructive",
+      });
     }
   };
 
   const handleDeletePost = async (id: string) => {
-    if (confirm("Tem certeza que deseja eliminar este artigo?")) {
+    if (!confirm("Tem certeza que deseja eliminar este artigo?")) return;
+
+    try {
       const { error } = await supabase.from("blog_posts").delete().eq("id", id);
-      if (!error) {
-        toast({ title: "Artigo eliminado!" });
-        fetchData();
-      }
+      
+      if (error) throw error;
+
+      toast({ title: "Artigo eliminado!" });
+      fetchData();
+    } catch (error: any) {
+      toast({
+        title: "Erro ao eliminar artigo",
+        description: error.message,
+        variant: "destructive",
+      });
     }
   };
 
   const handleMarkAsRead = async (id: string, read: boolean) => {
-    const { error } = await supabase
-      .from("contact_messages")
-      .update({ read })
-      .eq("id", id);
+    try {
+      const { error } = await supabase
+        .from("contact_messages")
+        .update({ read })
+        .eq("id", id);
 
-    if (!error) {
+      if (error) throw error;
+
       fetchData();
+    } catch (error: any) {
+      toast({
+        title: "Erro ao atualizar mensagem",
+        description: error.message,
+        variant: "destructive",
+      });
     }
   };
 
@@ -118,16 +270,27 @@ const Admin = () => {
             <CardTitle>Acesso à Gestão</CardTitle>
           </CardHeader>
           <CardContent>
-            <Input
-              type="password"
-              placeholder="Senha"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onKeyPress={(e) => e.key === "Enter" && handleLogin()}
-            />
-            <Button onClick={handleLogin} className="w-full mt-4">
-              Entrar
-            </Button>
+            <form onSubmit={handleLogin} className="space-y-4">
+              <Input
+                type="email"
+                placeholder="Email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                disabled={loading}
+              />
+              <Input
+                type="password"
+                placeholder="Senha"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                disabled={loading}
+              />
+              <Button type="submit" className="w-full" disabled={loading}>
+                {loading ? "A autenticar..." : "Entrar"}
+              </Button>
+            </form>
           </CardContent>
         </Card>
       </div>
@@ -138,7 +301,16 @@ const Admin = () => {
     <div className="min-h-screen bg-background">
       <Navbar />
       <div className="container mx-auto px-4 pt-32 pb-20">
-        <h1 className="text-4xl font-bold mb-8">Painel de Gestão</h1>
+        <div className="flex items-center justify-between mb-8">
+          <h1 className="text-4xl font-bold">Painel de Gestão</h1>
+          <div className="flex items-center gap-4">
+            <span className="text-sm text-muted-foreground">{user?.email}</span>
+            <Button variant="outline" onClick={handleLogout}>
+              <LogOut className="mr-2" size={16} />
+              Sair
+            </Button>
+          </div>
+        </div>
 
         <Tabs defaultValue="blog">
           <TabsList className="grid w-full grid-cols-3">
@@ -153,13 +325,46 @@ const Admin = () => {
                 <CardTitle>Criar Novo Artigo</CardTitle>
               </CardHeader>
               <CardContent>
-                <form onSubmit={handleCreatePost} className="space-y-4">
-                  <Input name="title" placeholder="Título" required />
-                  <Input name="excerpt" placeholder="Resumo" required />
-                  <Input name="cover_image" placeholder="URL da Imagem de Capa" />
-                  <Textarea name="content" placeholder="Conteúdo (HTML)" rows={10} required />
+                <form onSubmit={handleSubmit(onSubmitPost)} className="space-y-4">
+                  <div>
+                    <Input
+                      placeholder="Título"
+                      {...register("title")}
+                    />
+                    {errors.title && (
+                      <p className="text-sm text-destructive mt-1">{errors.title.message}</p>
+                    )}
+                  </div>
+                  <div>
+                    <Input
+                      placeholder="Resumo"
+                      {...register("excerpt")}
+                    />
+                    {errors.excerpt && (
+                      <p className="text-sm text-destructive mt-1">{errors.excerpt.message}</p>
+                    )}
+                  </div>
+                  <div>
+                    <Input
+                      placeholder="URL da Imagem de Capa"
+                      {...register("cover_image")}
+                    />
+                    {errors.cover_image && (
+                      <p className="text-sm text-destructive mt-1">{errors.cover_image.message}</p>
+                    )}
+                  </div>
+                  <div>
+                    <Textarea
+                      placeholder="Conteúdo (HTML)"
+                      rows={10}
+                      {...register("content")}
+                    />
+                    {errors.content && (
+                      <p className="text-sm text-destructive mt-1">{errors.content.message}</p>
+                    )}
+                  </div>
                   <div className="flex items-center gap-2">
-                    <Switch name="published" id="published" />
+                    <Switch {...register("published")} />
                     <label htmlFor="published">Publicar imediatamente</label>
                   </div>
                   <Button type="submit">Criar Artigo</Button>
@@ -215,7 +420,11 @@ const Admin = () => {
                         <p className="font-medium">{sub.name || "Sem nome"}</p>
                         <p className="text-sm text-muted-foreground">{sub.email}</p>
                       </div>
-                      <span className={`text-xs px-2 py-1 rounded ${sub.subscribed ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}`}>
+                      <span
+                        className={`text-xs px-2 py-1 rounded ${
+                          sub.subscribed ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
+                        }`}
+                      >
                         {sub.subscribed ? "Ativo" : "Inativo"}
                       </span>
                     </div>
@@ -233,7 +442,10 @@ const Admin = () => {
               <CardContent>
                 <div className="space-y-4">
                   {messages.map((msg) => (
-                    <div key={msg.id} className={`p-4 border rounded ${msg.read ? "bg-secondary/20" : "bg-accent/10"}`}>
+                    <div
+                      key={msg.id}
+                      className={`p-4 border rounded ${msg.read ? "bg-secondary/20" : "bg-accent/10"}`}
+                    >
                       <div className="flex justify-between items-start mb-2">
                         <div>
                           <p className="font-semibold">{msg.name}</p>

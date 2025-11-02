@@ -3,36 +3,75 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { useToast } from "./ui/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
+
+// Validation schema
+const newsletterSchema = z.object({
+  email: z
+    .string()
+    .min(1, "Email é obrigatório")
+    .email("Email inválido")
+    .max(255, "Email deve ter no máximo 255 caracteres"),
+  name: z
+    .string()
+    .min(1, "Nome é obrigatório")
+    .max(100, "Nome deve ter no máximo 100 caracteres"),
+});
+
+type NewsletterFormData = z.infer<typeof newsletterSchema>;
 
 const Newsletter = () => {
-  const [email, setEmail] = useState("");
-  const [name, setName] = useState("");
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const {
+    register,
+    handleSubmit,
+    formState: { errors },
+    reset,
+  } = useForm<NewsletterFormData>({
+    resolver: zodResolver(newsletterSchema),
+  });
+
+  const onSubmit = async (data: NewsletterFormData) => {
     setLoading(true);
 
     try {
-      const { error } = await supabase
-        .from("newsletter_subscribers")
-        .insert([{ email, name }]);
+      const { error } = await supabase.from("newsletter_subscribers").insert([
+        {
+          email: data.email.trim().toLowerCase(),
+          name: data.name.trim(),
+        },
+      ]);
 
-      if (error) throw error;
+      if (error) {
+        if (
+          error.message ===
+          'duplicate key value violates unique constraint "newsletter_subscribers_email_key"'
+        ) {
+          toast({
+            title: "Este email já está subscrito.",
+            description: "Obrigado pelo seu interesse!",
+            variant: "destructive",
+          });
+        } else {
+          throw error;
+        }
+        return;
+      }
 
       toast({
         title: "Subscrição realizada!",
         description: "Obrigado por subscrever a nossa newsletter.",
       });
-      setEmail("");
-      setName("");
+      reset();
     } catch (error: any) {
+      console.error("Error subscribing to newsletter:", error);
       toast({
         title: "Erro",
-        description: error.message === 'duplicate key value violates unique constraint "newsletter_subscribers_email_key"'
-          ? "Este email já está subscrito."
-          : "Ocorreu um erro. Por favor, tente novamente.",
+        description: error.message || "Ocorreu um erro. Por favor, tente novamente.",
         variant: "destructive",
       });
     } finally {
@@ -50,24 +89,32 @@ const Newsletter = () => {
           <p className="text-muted-foreground mb-8">
             Receba dicas e insights sobre coaching educativo e parentalidade consciente
           </p>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <Input
-              type="text"
-              placeholder="O seu nome"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-              className="bg-background"
-            />
-            <div className="flex gap-2">
+          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+            <div>
               <Input
-                type="email"
-                placeholder="O seu email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
+                type="text"
+                placeholder="O seu nome"
+                {...register("name")}
+                disabled={loading}
                 className="bg-background"
               />
+              {errors.name && (
+                <p className="text-sm text-destructive mt-1 text-left">{errors.name.message}</p>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <div className="flex-1">
+                <Input
+                  type="email"
+                  placeholder="O seu email"
+                  {...register("email")}
+                  disabled={loading}
+                  className="bg-background"
+                />
+                {errors.email && (
+                  <p className="text-sm text-destructive mt-1 text-left">{errors.email.message}</p>
+                )}
+              </div>
               <Button type="submit" disabled={loading}>
                 {loading ? "A subscrever..." : "Subscrever"}
               </Button>

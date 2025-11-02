@@ -8,25 +8,60 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/components/ui/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { Mail, Phone, MapPin } from "lucide-react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
+
+// Validation schema
+const contactFormSchema = z.object({
+  name: z
+    .string()
+    .min(1, "Nome é obrigatório")
+    .max(100, "Nome deve ter no máximo 100 caracteres"),
+  email: z
+    .string()
+    .min(1, "Email é obrigatório")
+    .email("Email inválido")
+    .max(255, "Email deve ter no máximo 255 caracteres"),
+  phone: z
+    .string()
+    .max(20, "Telefone deve ter no máximo 20 caracteres")
+    .regex(/^[\d\s\+\-\(\)]*$/, "Telefone contém caracteres inválidos")
+    .optional()
+    .or(z.literal("")),
+  message: z
+    .string()
+    .min(10, "Mensagem deve ter pelo menos 10 caracteres")
+    .max(2000, "Mensagem deve ter no máximo 2000 caracteres"),
+});
+
+type ContactFormData = z.infer<typeof contactFormSchema>;
 
 const Contacto = () => {
-  const [formData, setFormData] = useState({
-    name: "",
-    email: "",
-    phone: "",
-    message: "",
-  });
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const {
+    register,
+    handleSubmit,
+    formState: { errors },
+    reset,
+  } = useForm<ContactFormData>({
+    resolver: zodResolver(contactFormSchema),
+  });
+
+  const onSubmit = async (data: ContactFormData) => {
     setLoading(true);
 
     try {
-      const { error } = await supabase
-        .from("contact_messages")
-        .insert([formData]);
+      const { error } = await supabase.from("contact_messages").insert([
+        {
+          name: data.name.trim(),
+          email: data.email.trim().toLowerCase(),
+          phone: data.phone?.trim() || null,
+          message: data.message.trim(),
+        },
+      ]);
 
       if (error) throw error;
 
@@ -34,12 +69,13 @@ const Contacto = () => {
         title: "Mensagem enviada!",
         description: "Entraremos em contacto em breve.",
       });
-      
-      setFormData({ name: "", email: "", phone: "", message: "" });
-    } catch (error) {
+
+      reset();
+    } catch (error: any) {
+      console.error("Error submitting contact form:", error);
       toast({
         title: "Erro",
-        description: "Ocorreu um erro ao enviar a mensagem. Tente novamente.",
+        description: error.message || "Ocorreu um erro ao enviar a mensagem. Tente novamente.",
         variant: "destructive",
       });
     } finally {
@@ -64,40 +100,49 @@ const Contacto = () => {
               <CardTitle>Envie-nos uma mensagem</CardTitle>
             </CardHeader>
             <CardContent>
-              <form onSubmit={handleSubmit} className="space-y-4">
+              <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
                 <div>
                   <Input
                     placeholder="Nome"
-                    value={formData.name}
-                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                    required
+                    {...register("name")}
+                    disabled={loading}
                   />
+                  {errors.name && (
+                    <p className="text-sm text-destructive mt-1">{errors.name.message}</p>
+                  )}
                 </div>
                 <div>
                   <Input
                     type="email"
                     placeholder="Email"
-                    value={formData.email}
-                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                    required
+                    {...register("email")}
+                    disabled={loading}
                   />
+                  {errors.email && (
+                    <p className="text-sm text-destructive mt-1">{errors.email.message}</p>
+                  )}
                 </div>
                 <div>
                   <Input
                     type="tel"
                     placeholder="Telefone (opcional)"
-                    value={formData.phone}
-                    onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                    {...register("phone")}
+                    disabled={loading}
                   />
+                  {errors.phone && (
+                    <p className="text-sm text-destructive mt-1">{errors.phone.message}</p>
+                  )}
                 </div>
                 <div>
                   <Textarea
                     placeholder="Mensagem"
-                    value={formData.message}
-                    onChange={(e) => setFormData({ ...formData, message: e.target.value })}
-                    required
                     rows={6}
+                    {...register("message")}
+                    disabled={loading}
                   />
+                  {errors.message && (
+                    <p className="text-sm text-destructive mt-1">{errors.message.message}</p>
+                  )}
                 </div>
                 <Button type="submit" className="w-full" disabled={loading}>
                   {loading ? "A enviar..." : "Enviar Mensagem"}
