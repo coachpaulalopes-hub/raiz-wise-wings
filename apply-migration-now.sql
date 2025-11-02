@@ -100,6 +100,7 @@ BEGIN
     CREATE POLICY "Anyone can submit contact messages"
     ON public.contact_messages
     FOR INSERT
+    TO public
     WITH CHECK (true);
 
     -- Policy: Only admins can SELECT contact messages
@@ -129,6 +130,7 @@ BEGIN
     CREATE POLICY "Anyone can subscribe to newsletter"
     ON public.newsletter_subscribers
     FOR INSERT
+    TO public
     WITH CHECK (true);
 
     -- Policy: Only admins can SELECT newsletter subscribers
